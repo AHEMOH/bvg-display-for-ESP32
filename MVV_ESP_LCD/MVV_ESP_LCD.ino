@@ -12,7 +12,8 @@
 #include <ArduinoJson.h>
 #include <Arduino.h>
 #include "Wire.h"
-#include "time.h"
+//#include "time.h"
+#include <TimeLib.h>
 #include <ArduinoWebsockets.h>
 #include <list>
 #include <iterator>
@@ -30,6 +31,8 @@ using namespace std;
 #define MAX_EXCLUDE_DESTINATION 10
 #define MAX_JSON_DOCUMENT 20000
 #define MAX_DEPARTURE_LIST_LENGTH 100
+
+#define MYTZ "CET-1CEST,M3.5.0,M10.5.0/3" //Berlin CET-1CEST,M3.5.0,M10.5.0/3
 
 #ifndef TFT_DISPOFF
 #define TFT_DISPOFF 0x28
@@ -148,11 +151,12 @@ void drawTopLine()
     img.setTextFont(GLCD);
     img.setTextColor(0x005, TFT_YELLOW);
     img.drawString("Linie", 1, 0);
-    img.drawString("Ziel", 33, 0);
+    img.drawString("Ziel", 38, 0);
     img.drawString("Gleis", 128, 0);
-    img.drawString("A", 169, 0);
-    img.drawString("B", 184, 0);
-    img.drawString("C", 200, 0);
+//    img.drawString("A", 169, 0);
+//    img.drawString("B", 184, 0);
+    //img.drawString("C", 200, 0);
+    img.drawString("Auslast.", 165, 0);
     img.drawString("Min", 220, 0);
 }
 
@@ -285,11 +289,11 @@ void drawDeparture(int display_line, String line, String destination, int track,
   img.setTextColor(TFT_WHITE);
   if(track == 0 && wagon == 0)
   {
-    img.drawString(destination.substring(0, 20), 32, y_display_string);
+    img.drawString(destination.substring(0, 20), 38, y_display_string);
   }
   else
   {
-    img.drawString(destination.substring(0, 11), 32, y_display_string);
+    img.drawString(destination.substring(0, 11), 38, y_display_string);
   }
   
   //track 
@@ -313,11 +317,27 @@ void drawDeparture(int display_line, String line, String destination, int track,
         break;
   }
 
+  //occupancy
+  if(wagon == 11|| wagon == 12 || wagon == 13) img.drawString("_ _ _", 167, y_display_string);
+  switch(wagon)
+  {
+    case 13:
+      img.fillRoundRect(195, y_display+4, 14, 11, 3,TFT_WHITE); //rechts
+    case 12:
+      img.fillRoundRect(180, y_display+4, 14, 11, 3,TFT_WHITE); //mitte
+    case 11:
+      img.fillRoundRect(165, y_display+4, 14, 11, 3,TFT_WHITE); //links
+      default:
+        break;
+  }
+
   //minutes
   img.setTextDatum(TR_DATUM);
   sprintf(str_buffer, "%u", minutes);
-  img.drawString(str_buffer, 240,y_display_string);
-  
+  if ( minutes < 999 ){
+    img.drawString(str_buffer, 240,y_display_string);
+  }
+    
 }
 
 void setup()
@@ -348,7 +368,10 @@ void setup()
       break;
   }
 
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  //configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(0, 0, ntpServer);
+  setenv("TZ", MYTZ, 1); 
+  //configTime(MYTZ, ntpServer);
 
 
 }
@@ -438,10 +461,14 @@ int connect_wifi()
   return -1;
 }
 
+void convertFromJson(JsonVariantConst src, tm& dst) {
+  strptime(src.as<const char*>(), "%FT%TZ", &dst);
+}
+
 void handle_bvg_api(Config config)
 {
   HTTPClient http;
-  String url = "https://v5.bvg.transport.rest/stops/" + String(config.bahnhof) + "/departures?results=10";   
+  String url = "https://v5.bvg.transport.rest/stops/" + String(config.bahnhof) + "/departures?results=50";   
   http.begin(url);
   int httpResponseCode = http.GET();
 
@@ -517,19 +544,63 @@ void handle_bvg_api(Config config)
           //Calc minutes until departure
           //unsigned long departure = doc[i]["when"].as<long long>() / 1000; //ms to seconds
           //Serial.println(departure);
+          Serial.println("!!!!!!!====================================>>>>>>");
+          Serial.println("!!!!!!!====================================>>>>>>");
+          Serial.println("!!!!!!!====================================>>>>>>");
+          
+          Serial.print("JSON Input:");
           Serial.println(doc[i]["when"].as<String>());
 
+          tm timeinfo = doc[i]["when"];
+          
+          time_t now = time(NULL);
+          tm timeinfonow = *gmtime(&now);
+      Serial.print("DST:");
+      Serial.println(timeinfonow.tm_isdst);          
+
+          tmElements_t tmSet;
+            tmSet.Year = timeinfo.tm_year -70;
+            tmSet.Month = timeinfo.tm_mon + 1;
+            tmSet.Day = timeinfo.tm_mday;
+            tmSet.Hour = timeinfo.tm_hour -1; //HotFix DST
+            tmSet.Minute = timeinfo.tm_min;
+            tmSet.Second = timeinfo.tm_sec;
+          time_t when = makeTime(tmSet);
+
+          Serial.print("Epoch now:");
+          Serial.println(now);
+
+          Serial.print("Epoch when:");
+          Serial.println(when);
+
+          unsigned long wait = when - now;
+          Serial.print("Epoch wait:");
+          Serial.println(wait);
+          
+          unsigned long departure = when;
+
+
+
           unsigned long minutes = 0;
-//          if ( departure > now) {
-//            unsigned long wait = departure - now;
-//            Serial.println(wait);
-//            minutes = wait / 60;
+          if ( departure > now) {
+            minutes = wait / 60;
+            if ( minutes > 999 ) {
+              minutes = 999;
+            }
             //if (wait % 60 > 30) ++minutes;
-//            minutes +=  doc["departures"][i]["delay"].as<int>();
-//          }
+            //minutes +=  doc["departures"][i]["delay"].as<int>();
+          }
           Serial.println(minutes);
 
-          drawDeparture(cnt, doc[i]["line"]["name"].as<String>(), doc[i]["direction"].as<String>(), doc[i]["platform"].as<int>(), 0, minutes);
+
+          int occupancy;
+
+          if (strcmp("high", doc[i]["occupancy"]) == 0) { occupancy = 13; }
+          if (strcmp("medium", doc[i]["occupancy"]) == 0) { occupancy = 12; }
+          if (strcmp("low", doc[i]["occupancy"]) == 0) { occupancy = 11; }
+  
+
+          drawDeparture(cnt, doc[i]["line"]["name"].as<String>(), doc[i]["direction"].as<String>(), doc[i]["platform"].as<int>(), occupancy, minutes);
 
           ++cnt;
         }
@@ -544,6 +615,7 @@ void handle_bvg_api(Config config)
   http.end();
   delay(30000);  //Send a request every 30 seconds
 }
+
 
 void handle_mvg_api(Config config)
 {
