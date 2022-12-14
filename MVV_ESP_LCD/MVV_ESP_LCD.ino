@@ -53,6 +53,7 @@ using namespace std;
 
 enum types {
   mvg_api,
+  bvg_api,
   geops_api
 };
 
@@ -97,6 +98,7 @@ int config_number = -1;
 
 int connect_wifi();
 void handle_mvg_api(Config config);
+void handle_bvg_api(Config config);
 void init_geops_api(Config config);
 void handle_geops_api(Config config);
 void ping_geops_api();
@@ -336,6 +338,8 @@ void setup()
   switch (loaded_config.type) {
     case mvg_api:
       break;
+    case bvg_api:
+      break;
     case geops_api:
       init_geops_api(loaded_config);
       break;
@@ -356,6 +360,9 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) {
     switch (loaded_config.type)
     {
+      case bvg_api:
+        handle_bvg_api(loaded_config);
+        break;
       case mvg_api:
         handle_mvg_api(loaded_config);
         break;
@@ -431,6 +438,112 @@ int connect_wifi()
   return -1;
 }
 
+void handle_bvg_api(Config config)
+{
+  HTTPClient http;
+  String url = "https://v5.bvg.transport.rest/stops/" + String(config.bahnhof) + "/departures?results=10";   
+  http.begin(url);
+  int httpResponseCode = http.GET();
+
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println("New data");
+    Serial.println(httpResponseCode);
+    Serial.println(response);
+
+    Serial.println("Parsing JSON...");
+    DeserializationError error = deserializeJson(doc, response);
+    if (error) {
+      Serial.print(F("deserializeJson() failed: "));
+      Serial.println(error.c_str());
+    } else {
+      Serial.println("No errors");
+      //String servings = doc;
+      //Serial.println(servings);
+
+      time_t now;
+      time(&now);
+      Serial.println(now);
+
+      img.fillSprite(0x005);
+      drawTopLine();
+      unsigned int departures_length = doc.size();
+      unsigned int i = 0;
+      unsigned int cnt = 0;
+
+      while (i < departures_length && cnt < 8) {
+        // Extract what we are interested in from response
+        // based on config
+        bool interesting_type = false;
+        bool interesting_line = false;
+        bool interesting_destination = true;
+
+        for (int j = 0; j < MAX_INCLUDE_TYPE; ++j) {
+          Serial.println(config.include_type[j]);
+          if (config.include_type[j] && strcmp(config.include_type[j], "*") == 0) {
+            // We want to see all types
+            interesting_type = true;
+            break;
+          }
+          if (config.include_type[j] && strcmp(config.include_type[j], doc[i]["line"]["product"]) == 0) {
+            // We want to see this type
+            interesting_type = true;
+            break;
+          }
+        }
+
+        for (int j = 0; j < MAX_INCLUDE_LINE; ++j) {
+          Serial.println(config.include_line[j]);
+          if (config.include_line[j] && strcmp(config.include_line[j], "*") == 0) {
+            // We want to see all lines
+            interesting_line = true;
+            break;
+          }
+          if (config.include_line[j] && strcmp(config.include_line[j], doc[i]["line"]["name"]) == 0) {
+            // We want to see this line
+            interesting_line = true;
+            break;
+          }
+        }
+        if (interesting_type && interesting_line) {
+          for (int j = 0; j < MAX_EXCLUDE_DESTINATION; ++j) {
+            if (config.exclude_destinations[j] && strcmp(config.exclude_destinations[j], doc[i]["direction"]) == 0) {
+              interesting_destination = false;
+              break;
+            }
+          }
+        }
+        if (interesting_type && interesting_line && interesting_destination) {
+          //Calc minutes until departure
+          //unsigned long departure = doc[i]["when"].as<long long>() / 1000; //ms to seconds
+          //Serial.println(departure);
+          Serial.println(doc[i]["when"].as<String>());
+
+          unsigned long minutes = 0;
+//          if ( departure > now) {
+//            unsigned long wait = departure - now;
+//            Serial.println(wait);
+//            minutes = wait / 60;
+            //if (wait % 60 > 30) ++minutes;
+//            minutes +=  doc["departures"][i]["delay"].as<int>();
+//          }
+          Serial.println(minutes);
+
+          drawDeparture(cnt, doc[i]["line"]["name"].as<String>(), doc[i]["direction"].as<String>(), doc[i]["platform"].as<int>(), 0, minutes);
+
+          ++cnt;
+        }
+        ++i;
+      }
+      img.pushSprite(0, 0);
+    }
+  } else {
+    Serial.print("Error: Couldn't send GET: ");
+    Serial.println(httpResponseCode);
+  }
+  http.end();
+  delay(30000);  //Send a request every 30 seconds
+}
 
 void handle_mvg_api(Config config)
 {
